@@ -1,3 +1,5 @@
+#Liguo Wang
+#Tsinghua University
 from glob import glob
 from inspect import isclass
 import os
