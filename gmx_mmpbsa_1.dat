@@ -1,0 +1,15 @@
+awk -v pro=$pro -v lig=$lig '
+    BEGIN {i=-1; cp=""}
+    index($0, "[") { i++
+        txt=$0;
+        print txt
+        sub(/ *\[ */, "", txt);
+        sub(/ *\] */, "", txt)
+        if(txt==pro || txt==lig) cp=cp" "i
+    }
+    END {
+        sub(/^ */, "", cp)
+        gsub(/ +/, "\n", cp)
+        print cp"\ndel 0-"i"\n0|1\nname 2 "pro"_"lig"\nq"
+    }
+' $ndx | $gmx make_ndx -f $tpr -n $ndx -o _$pid.ndx &> $err

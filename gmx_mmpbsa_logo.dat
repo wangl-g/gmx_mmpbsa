@@ -1,0 +1,32 @@
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>   gmx_mmpbsa   <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>Fork: Liguo Wang<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+>>>>>>>>>>>>>>>>>>>>>>>>>>     2022-10-12 14:15        <<<<<<<<<<<<<<<<<<<<<<<<<
+>>   Usage: gmx_mmpbsa [-f   *.xtc  ] [-s   *.tpr  ] [-n   *.ndx     ]
+                       [-pro PROTEIN] [-lig <LIGAND|none>]
+                       [-cou dh     ] [-ts ie      ] [-cas <B:E:S,#> ]\n
+>> Default: gmx_mmpbsa -f   traj.xtc  -s   topol.tpr  -n   index.ndx
+                       -pro Protein   -lig Ligand
+                                       -ts ie
+--------------------------------------------------------------------------------
+>> Option:
+      -f: trajectory file
+      -s: topology file
+      -n: index file
+    -pro: index group name of protein
+    -lig: index group name of ligand, can be ignored using none
+    -cou: dh: calculate MM(COU) with Debye-Huckel screening method
+     -ts: ie: calculate entropy with interaction entropy method
+    -cas: select res for CAS, begin:end:step or number, using global resnum
+     -dt: same definitation as Gromacs, interval between frams
+     -nt: number of threat
+   Other: change them in the script directly
+--------------------------------------------------------------------------------
+>> Warning:
+   !!! 1. make sure gmx is available and version is consistent
+   !!! 2. gawk version > 3; macOS awk version > 2018
+   !!! 3. watch _pid.pdb to make sure PBC is correct
+--------------------------------------------------------------------------------
+>> Log:
+   20221012: First published.
+             Based on gmx_mmpbsa(Author: Jicun Li)
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>

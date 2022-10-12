@@ -1,0 +1,580 @@
+################################################################################
+# 3. MM-PBSA计算: pdb->pqr, 输出apbs, 计算MM, APBS
+# 3. run MM-PBSA, pdb->pqr, apbs, then calculate MM, PB, SA
+################################################################################
+
+echo -e ">> 3. run MM-PBSA calculatons"
+dt=$(awk '/t=/{n++;sub(/.*t=/,"");sub(/step=.*/,"");t[n]=$0;if(n==2){print t[n]-t[1];exit}}' $pdb)
+awk -v pid=_$pid          -v qrv=$qrv           -v dt="$dt"     \
+	-v apbs="$apbs"       -v useDH=$useDH       -v useTS=$useTS \
+	-v PBEset="$PBEset"   -v PBAset="$PBAset"                   \
+	-v meshType=$meshType -v gridType=$gridType -v gmem=$gmem   \
+	-v fadd=$fadd         -v cfac=$cfac         -v df=$df       \
+	-v withLig=$withLig   -v RS="\r?\n" '
+	BEGIN {
+		getline < qrv
+		getline Atyp < qrv
+		for(i=0; i<Atyp; i++) {
+			getline < qrv
+			for(j=0; j<Atyp; j++) { C6[i, j]=$(2+2*j); C12[i,j]=$(3+2*j) }
+		}
+		n=0
+		while(getline < qrv) { n++
+			Qatm[$1]=$2; Ratm[$1]=$3; Catm[$1]=$4
+			if($NF=="Pro") { Npro++; if(Npro==1) Ipro=n
+				ndxPro[$1]++; resPro[Npro]="P~"$(NF-2)
+			}
+			if($NF=="Lig") { Nlig++; if(Nlig==1) Ilig=n
+				ndxLig[$1]++; resLig[Nlig]="L~"$(NF-2)
+			}
+		}
+		close(qrv)
+		Ncom=Npro+Nlig
+
+		txt=PBEset;
+		gsub(/#[^\n]*\n/, "\n", txt);
+		split(txt, arr, "\n")
+		Nion=0
+		for(i in arr) {
+			split(arr[i], arr2)
+			if(arr2[1]~/temp/) temp=arr2[2]
+			if(arr2[1]~/pdie/) pdie=arr2[2]
+			if(arr2[1]~/sdie/) sdie=arr2[2]
+			if(arr2[1]~/ion/)  { Nion++; Qion[Nion]=arr2[3]; Cion[Nion]=arr2[5] }
+		}
+
+		Iion=0
+		for(i=1; i<=Nion; i++) Iion += Cion[i]*Qion[i]^2
+		eps0=8.854187812800001e-12
+		kb=1.380649e-23
+		Na=6.02214076e+23
+		qe=1.602176634e-19
+		RT2kJ=8.314462618*temp/1E3
+		kap=1E-10/sqrt(eps0*kb*temp*sdie/(Iion*qe^2*Na*1E3))
+
+		PBEset0=PBEset; sub(/sdie +[0-9]*\.*[0-9]*/, "sdie  1", PBEset0)
+
+		txt=PBAset; sub(/.*#gamma +con[a-zA-Z]+/, "", txt);
+		sub(/\n.*/, "", txt); split(txt, arr)
+		gamma=arr[1]; const=arr[2]
+
+		MAXPOS=1E9
+		minX= MAXPOS; maxX=-MAXPOS;
+		minY= MAXPOS; maxY=-MAXPOS;
+		minZ= MAXPOS; maxZ=-MAXPOS
+
+		fmt=sprintf("%.9f",dt/1E3)
+		sub(/0*$/,"",fmt);sub(/.*\./,"",fmt)
+		fmt="~%."length(fmt)"fns"
+	}
+
+	/REMARK/ {next}
+	/TITLE/ {
+		if(Nfrm) {
+			close(Fname[Nfrm]"_com.pqr")
+			close(Fname[Nfrm]"_pro.pqr")
+			if(withLig) close(Fname[Nfrm]"_lig.pqr")
+		}
+		Fout=FILENAME
+		txt=$0; sub(/.*t= */,"",txt); sub(/ .*/,"",txt)
+		txt=sprintf(fmt, txt/1E3);
+		sub(".pdb", txt, Fout)
+		Nfrm++
+		Fname[Nfrm]=Fout
+
+		minXpro[Nfrm]= MAXPOS; minXlig[Nfrm]= MAXPOS;
+		minYpro[Nfrm]= MAXPOS; minYlig[Nfrm]= MAXPOS;
+		minZpro[Nfrm]= MAXPOS; minZlig[Nfrm]= MAXPOS
+
+		maxXpro[Nfrm]=-MAXPOS; maxXlig[Nfrm]=-MAXPOS
+		maxYpro[Nfrm]=-MAXPOS; maxYlig[Nfrm]=-MAXPOS
+		maxZpro[Nfrm]=-MAXPOS; maxZlig[Nfrm]=-MAXPOS
+	}
+	/^ATOM/ {
+		ATOM=substr($0,1,6)
+		INDX=substr($0,7,5)+0
+		NAME=substr($0,13,4)
+		RES =substr($0,18,3)
+		CHN =substr($0,22,1); if(CHN=" ") CHN="A"
+		NUM =substr($0,23,4)
+		X   =substr($0,31,8); X += 0
+		Y   =substr($0,39,8); Y += 0
+		Z   =substr($0,47,8); Z += 0
+		r=Ratm[INDX]
+
+		txt=sprintf("%-6s%5d %-4s %3s %s%4d    %8.3f %8.3f %8.3f %12.6f %12.6f", \
+			ATOM, INDX, NAME, RES, CHN, NUM, X, Y, Z, Qatm[INDX], r)
+
+		if(INDX in ndxPro) {
+			print txt > Fout"_pro.pqr"
+			minXpro[Nfrm]=min(minXpro[Nfrm], X-r); maxXpro[Nfrm]=max(maxXpro[Nfrm], X+r)
+			minYpro[Nfrm]=min(minYpro[Nfrm], Y-r); maxYpro[Nfrm]=max(maxYpro[Nfrm], Y+r)
+			minZpro[Nfrm]=min(minZpro[Nfrm], Z-r); maxZpro[Nfrm]=max(maxZpro[Nfrm], Z+r)
+		}
+
+		if(withLig) {
+			print txt > Fout"_com.pqr"
+			if(INDX in ndxLig) {
+				print txt > Fout"_lig.pqr"
+				minXlig[Nfrm]=min(minXlig[Nfrm], X-r); maxXlig[Nfrm]=max(maxXlig[Nfrm], X+r)
+				minYlig[Nfrm]=min(minYlig[Nfrm], Y-r); maxYlig[Nfrm]=max(maxYlig[Nfrm], Y+r)
+				minZlig[Nfrm]=min(minZlig[Nfrm], Z-r); maxZlig[Nfrm]=max(maxZlig[Nfrm], Z+r)
+			}
+		}
+
+		minXcom[Nfrm]=min(minXpro[Nfrm], minXlig[Nfrm]); maxXcom[Nfrm]=max(maxXpro[Nfrm], maxXlig[Nfrm])
+		minYcom[Nfrm]=min(minYpro[Nfrm], minYlig[Nfrm]); maxYcom[Nfrm]=max(maxYpro[Nfrm], maxYlig[Nfrm])
+		minZcom[Nfrm]=min(minZpro[Nfrm], minZlig[Nfrm]); maxZcom[Nfrm]=max(maxZpro[Nfrm], maxZlig[Nfrm])
+
+		minX=min(minX, minXcom[Nfrm]); maxX=max(maxX, maxXcom[Nfrm])
+		minY=min(minY, minYcom[Nfrm]); maxY=max(maxY, maxYcom[Nfrm])
+		minZ=min(minZ, minZcom[Nfrm]); maxZ=max(maxZ, maxZcom[Nfrm])
+
+		next
+	}
+
+	END {
+		close(Fname[Nfrm]"_com.pqr")
+		close(Fname[Nfrm]"_pro.pqr")
+		if(withLig) close(Fname[Nfrm]"_lig.pqr")
+
+		kJcou=1389.35457520287
+		Rcut=1E10              # large enough
+
+		for(i=1; i<=Npro; i++) dE[resPro[i]]=0
+		for(i=1; i<=Nlig; i++) dE[resLig[i]]=0
+		Nres=asorti(dE, Tres)
+
+		txt="#Frame   "; txtDH=txt
+		for(i=1; i<=Nres; i++) {
+			ii=Tres[i]; sub(/~0+/, "~", ii)
+			txt   = txt""sprintf("%10s", ii)
+			txtDH = txtDH""sprintf("%21s", ii"(with DH)")
+		}
+		print txt >> pid"~resPBSA.dat"
+		print txt >> pid"~resPBSA_PB.dat"
+		print txt >> pid"~resPBSA_SA.dat"
+		if(withLig) {
+			print txt   >> pid"~resMM_VDW.dat"
+			print txtDH >> pid"~resMM.dat"
+			print txtDH >> pid"~resMM_COU.dat"
+			print txtDH >> pid"~res_MMPBSA.dat"
+		}
+
+		print "   #Frame      Binding( with DH ) "         \
+			 "|    MM    ( with DH )    PB        SA     " \
+			 "|   COU    ( with DH )     VDW   "            \
+			 "|       PBcom        PBpro        PBlig  "   \
+			 "|    SAcom     SApro     SAlig"    >> pid"~MMPBSA.dat"
+
+		maxstr=0
+		for(fr=1; fr<=Nfrm; fr++) maxstr=max(maxstr, length(Fname[fr]))
+
+		if(withLig) {
+			for(i=1; i<=Nres; i++) {
+				tag=Tres[i]
+				 dGres[tag,0]=0;  dGres[tag,1]=0
+				 dHres[tag,0]=0;  dHres[tag,1]=0
+				 MMres[tag,0]=0;  MMres[tag,1]=0
+				COUres[tag,0]=0; COUres[tag,1]=0
+				VDWres[tag]=0;   dPBres[tag]=0;  dSAres[tag]=0
+			}
+		}
+
+		for(fr=1; fr<=Nfrm; fr++) {
+			t_start = systime(); fflush("")
+
+			Fout=Fname[fr]
+			printf "   >> Frame %3d/%d: %-"maxstr"s", fr, Nfrm, Fout
+
+			txt=Fout"_pro.pqr"; if(withLig) txt=Fout"_com.pqr";
+			close(txt)
+			n=0;
+			while(getline < txt) { n++;
+				qr[n]=$2; type[n]=$3; res[n]=$4;
+				x[n]=$(NF-4);    y[n]=$(NF-3);   z[n]=$(NF-2)
+				resID[n]=$(NF-5); gsub(/[A-Z]+/, "", resID[n])
+			}
+			close(txt)
+
+			# MM
+			if(withLig) {
+				for(i=1; i<=Npro; i++) { dEcou[resPro[i]]=0; dEcouDH[resPro[i]]=0; dEvdw[resPro[i]]=0 }
+				for(i=1; i<=Nlig; i++) { dEcou[resLig[i]]=0; dEcouDH[resLig[i]]=0; dEvdw[resLig[i]]=0 }
+				for(i=1; i<=Npro; i++) {
+					ii=i+Ipro-1
+					qi=Qatm[qr[ii]]; ci=Catm[qr[ii]]
+					xi=x[ii]; yi=y[ii]; zi=z[ii]
+					for(j=1; j<=Nlig; j++) {
+						jj=j+Ilig-1; cj=Catm[qr[jj]]
+						r=sqrt( (xi-x[jj])^2+(yi-y[jj])^2+(zi-z[jj])^2 )
+						if(r<Rcut) {
+							t=1/(.1*r)^6
+							Ecou   = qi*Qatm[qr[jj]]/r;
+							EcouDH = Ecou*exp(-kap*r)
+							Evdw = (C12[ci,cj]*t-C6[ci,cj])*t
+							dEcou[  resPro[i]] += Ecou;   dEcou[  resLig[j]] += Ecou
+							dEcouDH[resPro[i]] += EcouDH; dEcouDH[resLig[j]] += EcouDH
+							dEvdw[  resPro[i]] += Evdw;   dEvdw[  resLig[j]] += Evdw
+						}
+					}
+				}
+
+				Ecou=0; Evdw=0
+				for(i in dEcou) {
+					dEcou[  i] *= kJcou/(2*pdie); Ecou   += dEcou[i];
+					dEcouDH[i] *= kJcou/(2*pdie); EcouDH += dEcouDH[i];
+					dEvdw[  i] /= 2;              Evdw   += dEvdw[i]
+				}
+			}
+
+			# PBSA
+			if(withLig) print "read\n" \
+				"  mol pqr "Fout"_com.pqr\n" \
+				"  mol pqr "Fout"_pro.pqr\n" \
+				"  mol pqr "Fout"_lig.pqr\n" \
+				"end\n\n" > Fout".apbs"
+			else        print "read\n" \
+				"  mol pqr "Fout"_pro.pqr\n" \
+				"end\n\n" > Fout".apbs"
+
+			if(meshType==0) { # GMXPBSA
+				if(withLig) print \
+					dimAPBS(Fout"_com", 1, minX, maxX, minY, maxY, minZ, maxZ), \
+					dimAPBS(Fout"_pro", 2, minX, maxX, minY, maxY, minZ, maxZ), \
+					dimAPBS(Fout"_lig", 3, minX, maxX, minY, maxY, minZ, maxZ)  > Fout".apbs"
+				else        print \
+					dimAPBS(Fout"_pro", 1, minX, maxX, minY, maxY, minZ, maxZ)  > Fout".apbs"
+			} else if(meshType==1) { # g_mmpbsa
+				if(withLig) print \
+					dimAPBS(Fout"_com", 1, minXcom[fr], maxXcom[fr], minYcom[fr], maxYcom[fr], minZcom[fr], maxZcom[fr]), \
+					dimAPBS(Fout"_pro", 2, minXpro[fr], maxXpro[fr], minYpro[fr], maxYpro[fr], minZpro[fr], maxZpro[fr]), \
+					dimAPBS(Fout"_lig", 3, minXlig[fr], maxXlig[fr], minYlig[fr], maxYlig[fr], minZlig[fr], maxZlig[fr])  > Fout".apbs"
+				else       print \
+					dimAPBS(Fout"_pro", 1, minXpro[fr], maxXpro[fr], minYpro[fr], maxYpro[fr], minZpro[fr], maxZpro[fr])  > Fout".apbs"
+			}
+			close(Fout".apbs")
+
+			cmd=apbs" "Fout".apbs > "Fout".out 2>& 1";
+			cmd | getline err; close(cmd)
+
+			txt=Fout".out";
+			while(getline < txt ) {
+				if(index($0, "CALCULATION #")) {
+					if(index($0, "("Fout"_com")) { t=1; n=Ncom }
+					if(index($0, "("Fout"_pro")) { t=2; n=Npro }
+					if(index($0, "("Fout"_lig")) { t=3; n=Nlig }
+					if(index($0, "~VAC)")) t += 10
+					if(index($0, "~SAS)")) t += 20
+					while(getline < txt) {
+						if(t<20 && index($0, "Per-atom energies:") \
+						|| t>20 && index($0, "Solvent Accessible Surface Area")) break
+					}
+
+					for(i=1; i<=n; i++) {
+						getline <txt;
+						if(t<20) r=$3; else r=$NF
+						if(t<10)       Esol[t%10, i]=r
+						else if(t<20)  Evac[t%10, i]=r
+						else if(t<30)  Esas[t%10, i]=gamma*r+const/n
+					}
+				}
+			}
+			close(txt)
+
+			PBcom=0; SAcom=0;
+			PBpro=0; SApro=0;
+			PBlig=0; SAlig=0;
+			for(i=1; i<=Ncom; i++) { Esol[1,i] -= Evac[1,i]; PBcom += Esol[1,i]; SAcom += Esas[1,i] }
+			for(i=1; i<=Npro; i++) { Esol[2,i] -= Evac[2,i]; PBpro += Esol[2,i]; SApro += Esas[2,i] }
+			for(i=1; i<=Nlig; i++) { Esol[3,i] -= Evac[3,i]; PBlig += Esol[3,i]; SAlig += Esas[3,i] }
+
+			for(i=1; i<=Npro; i++) { dPBres[resPro[i]]=0; dSAres[resPro[i]]=0 }
+			for(i=1; i<=Nlig; i++) { dPBres[resLig[i]]=0; dSAres[resLig[i]]=0 }
+			for(i=1; i<=Npro; i++) {
+				dPBres[resPro[i]] += Esol[1, Ipro+i-1]-Esol[2, i]
+				dSAres[resPro[i]] += Esas[1, Ipro+i-1]-Esas[2, i]
+			}
+			for(i=1; i<=Nlig; i++) {
+				dPBres[resLig[i]] += Esol[1, Ilig+i-1]-Esol[3, i]
+				dSAres[resLig[i]] += Esas[1, Ilig+i-1]-Esas[3, i]
+			}
+
+			preK=-1; if(withLig) preK=1
+			vdw[fr]=Evdw
+			pb[fr]=preK*(PBcom-PBpro-PBlig)
+			sa[fr]=preK*(SAcom-SApro-SAlig)
+			cou[fr,0]=Ecou;
+			cou[fr,1]=EcouDH
+			mm[fr,0]=cou[fr,0]+vdw[fr];
+			mm[fr,1]=cou[fr,1]+vdw[fr]
+			dh[fr,0]=preK*mm[fr,0] + pb[fr]+sa[fr]
+			dh[fr,1]=preK*mm[fr,1] + pb[fr]+sa[fr]
+			printf "%-12s %9.3f(%9.3f) | %9.3f(%9.3f) %9.3f %9.3f " \
+				  "| %9.3f(%9.3f) %9.3f | %12.3f %12.3f %12.3f | %9.3f %9.3f %9.3f\n", \
+				Fout, dh[fr,0], dh[fr,1], mm[fr,0], mm[fr,1], pb[fr], sa[fr], \
+				Ecou, EcouDH, Evdw, PBcom, PBpro, PBlig, SAcom, SApro, SAlig >> pid"~MMPBSA.dat"
+
+			total_time = (Nfrm-fr)*(systime() - t_start)
+			printf "  MM-PBSA(with DH) = %9.3f(%9.3f) kJ/mol    Estimated Time Remaining: ~ %0dh:%02dm:%02ds\n", \
+				dh[fr,0], dh[fr,1], int(total_time/3600), int(total_time%3600/60), total_time%60
+
+			fmt ="%s%9.3f %s"
+			fmt2="%s%9.3f(%9.3f) %s"
+			for(i=1; i<=Nres; i++) {
+				ii="";  if(i==1) ii=sprintf("%-9s", Fout)
+				txt=""; if(i==Nres) txt="\n"
+				tag=Tres[i]
+				if(withLig) {
+					printf fmt,  ii, dEvdw[tag], txt               >> pid"~resMM_VDW.dat"
+					printf fmt2, ii, dEcou[tag], dEcouDH[tag], txt >> pid"~resMM_COU.dat"
+					printf fmt2, ii, dEcou[tag]+dEvdw[tag], dEcouDH[tag]+dEvdw[tag], txt  >> pid"~resMM.dat"
+					printf fmt2, ii, dEcou[tag]+dEvdw[tag]+dPBres[tag]+dSAres[tag],
+									 dEcouDH[tag]+dEvdw[tag]+dPBres[tag]+dSAres[tag], txt >> pid"~res_MMPBSA.dat"
+
+					COUres[tag,0] += dEcou[tag]
+					COUres[tag,1] += dEcouDH[tag]
+					VDWres[tag]+= dEvdw[tag];
+				}
+				PBres[tag] += dPBres[tag]
+				SAres[tag] += dSAres[tag]
+				printf fmt, ii, preK*(dPBres[tag]+dSAres[tag]), txt >> pid"~resPBSA.dat"
+				printf fmt, ii, preK*(dPBres[tag]), txt             >> pid"~resPBSA_PB.dat"
+				printf fmt, ii, preK*(dSAres[tag]), txt             >> pid"~resPBSA_SA.dat"
+			}
+
+			fmt="%s%6s%6s\n"
+			for(i=1; i<=Npro; i++) {
+				ii=Ipro+i-1
+				txt=sprintf("%-6s%5d %-4s %3s A%4d    %8.3f%8.3f%8.3f", \
+					"ATOM", ii, type[ii], res[ii], resID[ii], x[ii], y[ii], z[ii])
+
+				tag=resPro[i]
+				printf fmt, txt, fixfmt(preK*dPBres[tag],6), fixfmt(preK*dPBres[tag],6) >> Fout"~resPBSA_PB.pdb"
+				printf fmt, txt, fixfmt(preK*dSAres[tag],6), fixfmt(preK*dSAres[tag],6) >> Fout"~resPBSA_SA.pdb"
+				if(withLig) {
+					printf fmt, txt, fixfmt(dEcou[tag],6),              fixfmt(dEcouDH[tag],6)            >> Fout"~resMM_COU.pdb"
+					printf fmt, txt, fixfmt(dEvdw[tag],6),              fixfmt(dEvdw[tag],6)              >> Fout"~resMM_VDW.pdb"
+					printf fmt, txt, fixfmt(dEcou[tag]+dEvdw[tag],6),   fixfmt(dEcouDH[tag]+dEvdw[tag],6) >> Fout"~resMM.pdb"
+					printf fmt, txt, fixfmt(dPBres[tag]+dSAres[tag],6), fixfmt(dPBres[tag]+dSAres[tag],6) >> Fout"~resPBSA.pdb"
+					printf fmt, txt, fixfmt(dEcou[tag]+dEvdw[tag]+preK*(dPBres[tag]+dSAres[tag]),6),
+									 fixfmt(dEcouDH[tag]+dEvdw[tag]+preK*(dPBres[tag]+dSAres[tag]),6)     >> Fout"~res_MMPBSA.pdb"
+				} else
+					printf fmt, txt, fixfmt(preK*(dPBres[tag]+dSAres[tag]),6),
+									 fixfmt(preK*(dPBres[tag]+dSAres[tag]),6) >> Fout"~resPBSA.pdb"
+			}
+			for(i=1; i<=Nlig; i++) {
+				ii=Ilig+i-1
+				txt=sprintf("%-6s%5d %-4s %3s A%4d    %8.3f%8.3f%8.3f", \
+					 "ATOM", ii, type[ii], res[ii], resID[ii], x[ii], y[ii], z[ii])
+				tag=resLig[i]
+				printf fmt, txt, fixfmt(dEcou[tag]+dEvdw[tag]+preK*(dPBres[tag]+dSAres[tag]),6),
+								 fixfmt(dEcouDH[tag]+dEvdw[tag]+preK*(dPBres[tag]+dSAres[tag]),6)     >> Fout"~res_MMPBSA.pdb"
+				printf fmt, txt, fixfmt(preK*dPBres[tag],6),        fixfmt(preK*dPBres[tag],6)        >> Fout"~resPBSA_PB.pdb"
+				printf fmt, txt, fixfmt(preK*dSAres[tag],6),        fixfmt(preK*dSAres[tag],6)        >> Fout"~resPBSA_SA.pdb"
+				printf fmt, txt, fixfmt(dEcou[tag],6),              fixfmt(dEcouDH[tag],6)            >> Fout"~resMM_COU.pdb"
+				printf fmt, txt, fixfmt(dEvdw[tag],6),              fixfmt(dEvdw[tag],6)              >> Fout"~resMM_VDW.pdb"
+				printf fmt, txt, fixfmt(dEcou[tag]+dEvdw[tag],6),   fixfmt(dEcouDH[tag]+dEvdw[tag],6) >> Fout"~resMM.pdb"
+				printf fmt, txt, fixfmt(dPBres[tag]+dSAres[tag],6), fixfmt(dPBres[tag]+dSAres[tag],6) >> Fout"~resPBSA.pdb"
+			}
+
+			close(Fout"~resMM.pdb")
+			close(Fout"~resMM_COU.pdb")
+			close(Fout"~resMM_VDW.pdb")
+			close(Fout"~resPBSA.pdb")
+			close(Fout"~resPBSA_PB.pdb")
+			close(Fout"~resPBSA_SA.pdb")
+			close(Fout"~res_MMPBSA.pdb")
+		}
+
+		print "#mol res       MM-PBSA(with DH  )        MM(with DH  )      PBSA       " \
+			  "COU(with DH  )       VDW        PB        SA" >> pid"~res.dat"
+		fmt="%-12s %9.3f(%9.3f) %9.3f(%9.3f) %9.3f %9.3f(%9.3f) %9.3f %9.3f %9.3f\n"
+		for(i=1; i<=Nres; i++) {
+			tag=Tres[i]
+
+			VDWres[tag]   /= Nfrm
+			PBres[tag]    /= Nfrm
+			SAres[tag]    /= Nfrm
+			COUres[tag,0] /= Nfrm
+			COUres[tag,1] /= Nfrm
+
+			MMres[tag,0]=COUres[tag,0]+VDWres[tag]
+			MMres[tag,1]=COUres[tag,1]+VDWres[tag]
+			dHres[tag,0]=MMres[tag,0]+PBres[tag]+SAres[tag]
+			dHres[tag,1]=MMres[tag,1]+PBres[tag]+SAres[tag]
+
+			txt=tag; sub(/L~0+/, "Lig ", txt); sub(/P~0+/, "Pro ", txt)
+			printf fmt, txt,
+				dHres[tag,0], dHres[tag,1],
+				MMres[tag,0], MMres[tag,1],
+				PBres[tag]+SAres[tag],
+				COUres[tag,0], COUres[tag,1], VDWres[tag], \
+				PBres[tag], SAres[tag]  > pid"~res.dat"
+
+			ii="";  if(i==1) ii=sprintf("---------------------------------------\n%-9s", "mean")
+			txt=""; if(i==Nres) txt="\n"
+			if(withLig) {
+				printf "%s%9.3f(%9.3f) %s", ii, dHres[tag,0], dHres[tag,1]  , txt >> pid"~res_MMPBSA.dat"
+				printf "%s%9.3f(%9.3f) %s", ii, MMres[tag,0], MMres[tag,1]  , txt >> pid"~resMM.dat"
+				printf "%s%9.3f %s",        ii, VDWres[tag]                 , txt >> pid"~resMM_VDW.dat"
+				printf "%s%9.3f(%9.3f) %s", ii, COUres[tag,0], COUres[tag,1], txt >> pid"~resMM_COU.dat"
+			}
+			printf "%s%9.3f %s",        ii, preK*(PBres[tag]+SAres[tag]), txt >> pid"~resPBSA.dat"
+			printf "%s%9.3f %s",        ii, preK*(PBres[tag])           , txt >> pid"~resPBSA_PB.dat"
+			printf "%s%9.3f %s",        ii, preK*(SAres[tag])           , txt >> pid"~resPBSA_SA.dat"
+		}
+
+		fmt="%s%6s%6s\n"
+		for(i=1; i<=Npro; i++) {
+			ii=Ipro+i-1
+			txt=sprintf("%-6s%5d %-4s %3s A%4d    %8.3f%8.3f%8.3f", \
+				"ATOM", ii, type[ii], res[ii], resID[ii], x[ii], y[ii], z[ii])
+
+			tag=resPro[i]
+			if(withLig) {
+				printf fmt, txt, fixfmt(dHres[tag,0],6),             fixfmt(dHres[tag,1],6)                 >> pid"~res_MMPBSA.pdb"
+				printf fmt, txt, fixfmt(MMres[tag,0]+VDWres[tag],6), fixfmt(MMres[tag,1]+VDWres[tag],6)     >> pid"~resMM.pdb"
+				printf fmt, txt, fixfmt(COUres[tag,0],6),            fixfmt(COUres[tag,1],6)                >> pid"~resMM_COU.pdb"
+				printf fmt, txt, fixfmt(VDWres[tag],6),              fixfmt(VDWres[tag],6)                  >> pid"~resMM_VDW.pdb"
+			}
+			printf fmt, txt, fixfmt(preK*(PBres[tag]+SAres[tag]),6), fixfmt(preK*(PBres[tag]+SAres[tag]),6) >> pid"~resPBSA.pdb"
+			printf fmt, txt, fixfmt(preK*PBres[tag]+SAres[tag],6),   fixfmt(preK*PBres[tag]+SAres[tag],6)   >> pid"~resPBSA_PB.pdb"
+			printf fmt, txt, fixfmt(preK*SAres[tag],6),              fixfmt(preK*SAres[tag],6)              >> pid"~resPBSA_SA.pdb"
+		}
+		for(i=1; i<=Nlig; i++) {
+			ii=Ilig+i-1
+			txt=sprintf("%-6s%5d %-4s %3s A%4d    %8.3f%8.3f%8.3f", \
+				 "ATOM", ii, type[ii], res[ii], resID[ii], x[ii], y[ii], z[ii])
+			tag=resLig[i]
+			printf fmt, txt, fixfmt(dHres[tag,0],6),                 fixfmt(dHres[tag,1],6)                 >> pid"~res_MMPBSA.pdb"
+			printf fmt, txt, fixfmt(MMres[tag,0]+VDWres[tag],6),     fixfmt(MMres[tag,1]+VDWres[tag],6)     >> pid"~resMM.pdb"
+			printf fmt, txt, fixfmt(COUres[tag,0],6),                fixfmt(COUres[tag,1],6)                >> pid"~resMM_COU.pdb"
+			printf fmt, txt, fixfmt(VDWres[tag],6),                  fixfmt(VDWres[tag],6)                  >> pid"~resMM_VDW.pdb"
+			printf fmt, txt, fixfmt(preK*(PBres[tag]+SAres[tag]),6), fixfmt(preK*(PBres[tag]+SAres[tag]),6) >> pid"~resPBSA.pdb"
+			printf fmt, txt, fixfmt(preK*PBres[tag]+SAres[tag],6),   fixfmt(preK*PBres[tag]+SAres[tag],6)   >> pid"~resPBSA_PB.pdb"
+			printf fmt, txt, fixfmt(preK*SAres[tag],6),              fixfmt(preK*SAres[tag],6)              >> pid"~resPBSA_SA.pdb"
+		}
+
+		 dH[0]=0;  dH[1]=0
+		 MM[0]=0;  MM[1]=0
+		COU[0]=0; COU[1]=0
+		VDW=0;    PB=0;     SA=0
+		for(i=1; i<=Nfrm; i++) {
+			dH[0] += dh[i,0]/Nfrm;  dH[1] += dh[i,1]/Nfrm
+			MM[0] += mm[i,0]/Nfrm;  MM[1] += mm[i,1]/Nfrm
+			COU[0]+= cou[i,0]/Nfrm; COU[1]+= cou[i,1]/Nfrm
+			VDW += vdw[i]/Nfrm
+			PB  += pb[i]/Nfrm
+			SA  += sa[i]/Nfrm
+		}
+
+		TdS[0]=0; TdS[1]=0 # 1 for DH
+		if(withLig) {
+			for(i=1; i<=Nfrm; i++) {
+				TdS[0] += exp((mm[i,0]-MM[0])/RT2kJ)/Nfrm
+				TdS[1] += exp((mm[i,1]-MM[1])/RT2kJ)/Nfrm
+			}
+		}
+		TdS[0]=-RT2kJ*log(TdS[0]); TdS[1]=-RT2kJ*log(TdS[1]);
+		 dG[0]=dH[0]-TdS[0];        dG[1]=dH[1]-TdS[1];
+		 Ki[0]=exp(dG[0]/RT2kJ);    Ki[1]=exp(dG[1]/RT2kJ)
+
+
+	}
+
+	function dimAPBS(file, Imol, minX, maxX, minY, maxY, minZ, maxZ) {
+
+		lenX=max(maxX-minX, 0.1); cntX=(maxX+minX)/2
+		lenY=max(maxY-minY, 0.1); cntY=(maxY+minY)/2
+		lenZ=max(maxZ-minZ, 0.1); cntZ=(maxZ+minZ)/2
+		cX  =lenX*cfac;           fX  =min(cX, lenX+fadd)
+		cY  =lenY*cfac;           fY  =min(cY, lenY+fadd)
+		cZ  =lenZ*cfac;           fZ  =min(cZ, lenZ+fadd)
+
+		levN=4    # 划分级别
+		t=2^(levN+1)
+		nX=round(fX/df)-1; nX=max(t*round(nX/t)+1, 33)
+		nY=round(fY/df)-1; nY=max(t*round(nY/t)+1, 33)
+		nZ=round(fZ/df)-1; nZ=max(t*round(nZ/t)+1, 33)
+
+		if(gridType==0) { # GMXPBSA method
+			fpre=1; cfac=1.7
+			fX=lenX+2*fadd; cX=fX*cfac; nX=t*(int(fX/(t*df))+1+fpre)+1
+			fY=lenY+2*fadd; cY=fY*cfac; nY=t*(int(fY/(t*df))+1+fpre)+1
+			fZ=lenZ+2*fadd; cZ=fZ*cfac; nZ=t*(int(fZ/(t*df))+1+fpre)+1
+		}
+
+		MGset="mg-auto"
+		mem = 200*nX*nY*nZ/1024./1024. # MB
+
+#		npX=nX; npY=nY; npZ=nZ
+#		gmem=4000
+#		ofrac=0.1
+#		if(mem>=gmem) {
+#			while(mem>gmem) {
+#				maxN=max(npX, max(npY, npZ))
+#					 if(maxN==npX) npX = t*((npX-1)/t-1)+1
+#				else if(maxN==npY) npY = t*((npY-1)/t-1)+1
+#				else if(maxN==npZ) npZ = t*((npZ-1)/t-1)+1
+#				mem = 200*npX*npY*npZ/1024./1024
+#			}
+
+#			t=nX/npX; if(t>1) npX = int(t*(1+2*ofrac) + 1.0);
+#			t=nY/npY; if(t>1) npY = int(t*(1+2*ofrac) + 1.0);
+#			t=nZ/npZ; if(t>1) npZ = int(t*(1+2*ofrac) + 1.0);
+#			MGset="mg-para\n  ofrac "ofrac"\n  pdime "npX" "npY" "npZ
+#		}
+
+		XYZset="  "MGset \
+			"\n  mol "Imol \
+			"\n  dime   "nX"  "nY"  "nZ"        # 格点数目, 所需内存: "mem" MB"  \
+			"\n  cglen  "cX"  "cY"  "cZ"        # 粗略格点长度" \
+			"\n  fglen  "fX"  "fY"  "fZ"        # 细密格点长度" \
+			"\n  fgcent "cntX"  "cntY"  "cntZ"  # 细密格点中心" \
+			"\n  cgcent "cntX"  "cntY"  "cntZ"  # 粗略格点中心"
+
+		return \
+			"ELEC name "file"\n" \
+			XYZset "\n" \
+			PBEset "\n" \
+			"end\n\n" \
+			"ELEC name "file"~VAC\n" \
+			XYZset  "\n" \
+			PBEset0 "\n" \
+			"end\n\n" \
+			"APOLAR name "file"~SAS\n" \
+			"  mol "Imol"\n" \
+			PBAset"\n" \
+			"end\n\n" \
+			"print elecEnergy "file" - "file"~VAC end\n" \
+			"print apolEnergy "file"~SAS end\n\n"
+	}
+	function min(x, y)    { return x<y ? x : y }
+	function max(x, y)    { return x>y ? x : y }
+	function round(x)     { return int(x+0.5)  }
+	function fixfmt(x,m, nint,npre,nexp,str){
+		str=sprintf("%.9f", x)
+		sub(/^0+/,   "", str);
+		sub(/^-0+/,  "-", str);
+		nint=index(str, ".")-1
+		if(-10^m<x && x<-10^(-m) || 10^(-m)<x &&x<10^m ) {
+			str=sprintf("%."(m-nint-1)"f", x)
+			sub(/^0+/,   "", str);
+			sub(/^-0+/,  "-", str);
+		} else {
+			str=sprintf("%.9E", x)
+			npre=index(str, ".")
+			sub(/.*E\+0*$/, "",  str);
+			sub(/.*E\+0*/, "E",  str);
+			sub(/.*E-0*/,  "E-", str)
+			nexp=length(str)
+			str=sprintf("%"(m-nexp)"."(m-nexp-npre)"E", x)
+			sub(/E\+0*$/, "",  str);
+			sub(/E\+0*/, "E",  str);
+			sub(/E-0*/,  "E-", str)
+		}
+		return str
+	}
+' $pdb
+echo -e "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n"
