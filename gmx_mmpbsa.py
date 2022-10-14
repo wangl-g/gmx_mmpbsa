@@ -1,15 +1,165 @@
-#Liguo Wang
+#Wang Liguo
 #Tsinghua University
+from distutils.command.clean import clean
 from glob import glob
 from inspect import isclass
 import os
 from socket import ntohl
+from matplotlib.colors import cnames
 import pandas as pd
 import numpy as np
 import math
 import sys
 import re
 import subprocess
+import threading
+from fnmatch import fnmatch
+import matplotlib.pyplot as plt 
+from matplotlib import font_manager as fm
+from matplotlib import cm
+
+class newstring(str):
+    def __init__(self,value):
+        str.__init__(value)
+        self.value = value
+    def split(self):
+        c_list = []
+        tmp = ''
+        feature = ' ()|\n'
+        for c in self.value:
+            if not c in feature:
+                tmp = tmp + c
+            else:
+                if len(tmp)>0:
+                    c_list.append(tmp)
+                    tmp = ''
+        final_list = []
+        old_elem = ''
+        for elem in c_list:
+            if elem=='with':
+                final_list.append(old_elem+' with DH')
+                continue
+            if elem=='DH':
+                continue
+            final_list.append(elem)
+            old_elem = elem
+        return final_list
+
+def readindata(filename):
+    text = []
+    with open(filename) as f:
+        for ln in f.readlines():
+            text.append(newstring(ln))
+    index = []
+    lens = 0
+    for i in range(1,len(text)):
+        if text[i][0:2]=='--':
+            break
+        lens = lens + 1
+    data = np.zeros([lens,len(text[0].split())-1])
+    for i in range(1,len(text)):
+        if text[i][0:2]=='--':
+            break
+        index.append(text[i].split()[0])
+        for j in range(1,len(text[i].split())):
+            if text[i].split()[j] == '|':
+                data[i-1][j-1] = np.nan
+            else:
+                data[i-1][j-1]=float(text[i].split()[j])
+    columns = text[0].split()[1:]
+    dataframe = pd.DataFrame(data=data,index=index,columns=columns)
+    return dataframe
+
+def plot_binding_bar(work_dir,dataframe):
+    '''Plot the bar figure from total MMPBSA data'''
+    names = [('Binding Free Energy\nBinding = MM + PB + SA',
+             ['Binding','MM','PB','SA']),
+             ('Molecule Mechanics\nMM = COU + VDW',
+             ['MM','COU','VDW']),
+             ('Poisson Boltzman\nPB = PBcom - PBpro - PBlig',
+             ['PB','PBcom','PBpro','PBlig']),
+             ('Surface Area\nSA = SAcom - SApro - SAlig',
+             ['SA','SAcom','SApro','SAlig'])]
+    fig,axs = plt.subplots(2,2,figsize=(8,8),dpi=72)
+    axs = np.ravel(axs)
+
+    for ax,(title,name) in zip(axs,names):
+        ax.bar(name,dataframe[name].mean(),width=0.5,
+               yerr=dataframe[name].std(),color=['r','g','b','y'])
+        for i in range(len(dataframe[name].mean())):
+            ax.text(name[i],dataframe[name].mean()[i],
+                    '%.3f'%dataframe[name].mean()[i],
+                    ha='center',va='center')
+        ax.grid(b=True,axis='y')
+        ax.set_xlabel('Energy Decomposition Term')
+        ax.set_ylabel('Free energy (kJ/mol)')
+        ax.set_title(title)
+    plt.suptitle('MMPBSA Results')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.savefig(os.path.join(work_dir,'MMPBSA_Results.png'))
+    plt.show()
+
+def plot_plot_pie(work_dir,datas):
+    '''Plot the composition curve and pie figure'''
+    fig,axs = plt.subplots(2,2,figsize=(8,8),dpi=72)
+    axs = np.ravel(axs)
+
+    names = [('Composition of MMPBSA',[0,1,4]),
+             ('Composition of MM',[1,2,3]),
+             ('Composition of PBSA',[4,5,6])]
+    labels = ['res_MMPBSA','resMM','resMM_COU','resMM_VDW',
+             'resPBSA','resPBSA_PB','resPBSA_SA']
+    colors = ['black','blue','red']
+    linestyles = ['-','--',':']
+    alphas = [1,0.4,0.4]
+    for ax,(title,name) in zip(axs[:-1],names):
+        for i in range(len(name)):
+            ax.plot(range(datas[name[i]].shape[1]),datas[name[i]].mean(),
+                    color=colors[i],alpha=alphas[i],label=labels[name[i]],
+                    linestyle=linestyles[i],linewidth=2.5)
+        ax.grid(b=True,axis='y')
+        ax.set_xlabel('Residues No.')
+        ax.set_ylabel('Free Energy Contribution (kJ/mol)')
+        ax.legend(loc='best')
+        ax.set_title(title)
+    
+    explode = np.zeros([datas[0].shape[1]])
+    maxposition = np.where(datas[0].mean() == datas[0].mean().abs().max())
+    maxposition = np.append(maxposition,np.where(datas[0].mean() == 
+                            -1 * datas[0].mean().abs().max()))
+    explode[maxposition] = 0.4
+    colors = cm.rainbow(np.arange(datas[0].shape[1])/datas[0].shape[1])
+    patches, texts, autotexts = axs[-1].pie(abs(datas[0].mean()/datas[0].mean().sum()*100),
+                explode=explode,labels=datas[0].columns,autopct='%1.1f%%',
+                colors=colors,shadow=True,startangle=90,labeldistance=1.1,
+                pctdistance=0.8)
+    axs[-1].axis('equal') # Equal aspect ratio ensures that pie is drawn as a circle
+    axs[-1].set_title('Composition of MMPBSA')
+    # set font size
+    proptease = fm.FontProperties()
+    proptease.set_size('xx-small')
+    # font size include: xx-small,x-small,small,medium,large,x-large.xx-large or numbers
+    plt.setp(autotexts,fontproperties=proptease)
+    plt.setp(texts,fontproperties=proptease)
+    plt.suptitle('MMPBSA Energy Composition')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    plt.savefig(os.path.join(work_dir,'MMPBSA_Energy_Composition.png'),dpi=600)
+    plt.show()
+
+def DH_split(ori_data:pd.DataFrame):
+    data = pd.DataFrame()
+    data_with_dh = pd.DataFrame()
+    for columnname, column in ori_data.iteritems():
+        if 'with DH' in columnname:
+            data_with_dh[columnname.strip(' with DH')] = column
+        else:
+            data[columnname] = column
+    for columnname, column in data.iteritems():
+        if not columnname in data_with_dh.columns:
+            data_with_dh[columnname] = column
+    return data, data_with_dh
 
 def get_frame(filename:str):
     gmx_run = os.popen('{0} check -f {1} 2>&1'.format(gmx,filename))
@@ -67,7 +217,7 @@ def set_default():
     global dump
     dump="{0} dump".format(gmx)		# gmx dump
     global trjconv
-    trjconv="{0} trjconv -dt 2500".format(gmx)			# gmx trjconv, use -b -e -dt, NOT -skip
+    trjconv="{0} trjconv -dt 25000".format(gmx)			# gmx trjconv, use -b -e -dt, NOT -skip
     global apbs
     apbs='apbs'				# APBS(Linux)
     os.system('export MCSH_HOME=/dev/null')				# APBS io.mc
@@ -93,6 +243,8 @@ def set_default():
     fadd=10				# 分子尺寸到细密格点的增加值(A)
     global df                    # Amount added to mol-dim to get fine grid dim (A)
     df=0.5				# 细密格点间距(A) The desired fine mesh spacing (A)
+    global isClean
+    isClean=0
 
     # 极性计算设置(Polar)
     global PBEset
@@ -164,7 +316,7 @@ def check_gmx_apbs():
         raise Exception("!!! WARNING !!!  APBS NOT available !\n")
 
 def parse_command(parse:list):
-    global useDH, useTS, isCAS,trj,tpr,ndx,pro,lig,cas,tasks
+    global useDH, useTS, isCAS,trj,tpr,ndx,pro,lig,cas,tasks,isClean
     useDH,useTS,isCAS=0,0,0
     cas=''
     it = iter(parse)
@@ -198,6 +350,8 @@ def parse_command(parse:list):
             if item=='-cas':
                 isCAS = 1
                 continue
+            if item=='-clean':
+                isClean= 1
         except StopIteration:
             break
     if isCAS:
@@ -208,7 +362,7 @@ def parse_command(parse:list):
                 if item=='-cas':
                     while True:
                         item = next(it)
-                        if not item in['-s','-f','-n','-pro','-lig','-cou','-ts','-cas','-nt']:
+                        if not item in['-s','-f','-n','-pro','-lig','-cou','-ts','-cas','-nt','-clean']:
                             cas = cas + item
                         else:
                             break
@@ -263,7 +417,6 @@ def parse_command(parse:list):
             p = subprocess.Popen(awf_f,shell=True,executable="/bin/bash")
             p.wait()
             ndx = '_{0}.ndx'.format(pid)
-        print('>> 0. set up environmets and parameters: OK !\n')
 
 def preprocess():
 ################################################################################
@@ -315,7 +468,6 @@ def preprocess():
             p = subprocess.Popen('echo {0} | {1}  -s {2} -n {3} -f {4} -o {5} &>>{6} -pbc mol -center'.format(\
             lig+'\n'+com,trjconv,tpr,ndx,trjwho,pdb,err),shell=True,executable="/bin/bash")
             p.wait()
-        print(">> 1. preprocessing trajectory: OK !\n")
 
 def produce_qrv(pdb_task):
 ################################################################################
@@ -343,12 +495,13 @@ def produce_qrv(pdb_task):
             count = count + 1
         p = subprocess.Popen(step2_order,shell=True,executable='/bin/bash')
         p.wait()
-        print('>> 2. generate qrv file: OK !\n')
+        with open('test.log','w') as f:
+            f.write(step2_order)
         if isCAS:
             qrv = "_{0}_CAS.qrv".format(pid)
             pdb = "_{0}_CAS.pdb".format(pid)
 
-def cal_mmpbsa(pdb_task):
+def cal_mmpbsa(_pid,pdb_task):
 ################################################################################
 # 3. MM-PBSA计算: pdb->pqr, 输出apbs, 计算MM, APBS
 # 3. run MM-PBSA, pdb->pqr, apbs, then calculate MM, PB, SA
@@ -360,7 +513,7 @@ def cal_mmpbsa(pdb_task):
         names = ['trjconv','tpr','ndx','pro','lig','step','gmx','dump','trj','apbs','pid','err','qrv','pdb',\
             'radType','radLJ0','meshType','gridType','cfac','fadd','df','PBEset','PBAset','useDH','useTS','isCAS',\
                 'cas','withLig','com','trjwho','trjcnt','trjcls']
-        keys = [trjconv,tpr,ndx,pro,lig,step,gmx,dump,trj,apbs,pid,err,qrv,pdb_task,\
+        keys = [trjconv,tpr,ndx,pro,lig,step,gmx,dump,trj,apbs,_pid,err,qrv,pdb_task,\
             radType,radLJ0,meshType,gridType,cfac,fadd,df,PBEset,PBAset,useDH,useTS,isCAS,\
                 cas,withLig,com,trjwho,trjcnt,trjcls]
         count = 0
@@ -373,20 +526,121 @@ def cal_mmpbsa(pdb_task):
             f.write(step3_order)
         p = subprocess.Popen('chmod 777 {0}'.format(order_file_name),shell=True,executable='/bin/bash')
         p.wait()
-        subprocess.run('nohup ./{0} >> err.log 2>&1 &'.format(order_file_name),shell=True,executable='/bin/bash')
+        p = subprocess.Popen('./{0} >> err.log'.format(order_file_name),shell=True,executable='/bin/bash')
+        p.wait()
+
+class output_data():
+    def __init__(self,suffix:str) -> None:
+        self.suffix = suffix
+        self.pid = []
+        self.fileList = []
+        self.fileHandle = []
+    def complete_filename(self):
+        for __pid__ in self.pid:
+            self.fileList.append(__pid__+self.suffix)
+    def merge(self):
+        for file in self.fileList:
+            f = open(file,'r')
+            self.fileHandle.append(f)
+        allData = []
+        flag = True
+        for f in self.fileHandle:
+            if flag:
+                allData = allData + f.readlines()
+                flag = False
+            else:
+                allData = allData + f.readlines()[1:] 
+        lines = ''
+        for line in allData:
+            lines = lines + line
+        for file in self.fileHandle:
+            file.close()
+        return lines
+
+def data_merge(task_num):
+    suffix_list = ['~resPBSA.dat','~resPBSA_PB.dat','~resPBSA_SA.dat',\
+    '~resMM.dat', '~resMM_COU.dat', '~res_MMPBSA.dat','~MMPBSA.dat','~resMM_VDW.dat']
+    dataList = []
+    for suffix in suffix_list:
+        data = output_data(suffix)
+        for task in range(task_num):
+            data.pid.append('_{0}{1}'.format(pid,task))
+        dataList.append(data)
+    for data in dataList:
+        data.complete_filename()
+        txt = data.merge()
+        with open('_'+pid+data.suffix,'w') as f:
+            f.write(txt)
 
 def rm_temp():
-    os.system(r'rm -f io.mc \#*')
-       
-                                               
+    global isClean,tasks,pid
+    if isClean:
+        rm_feature=['io.mc','_'+pid+'$'+'*','*bash']
+        rm_list = []
+        for f in rm_feature:
+            if '$' in f:
+                for i in range(tasks):
+                    rm_list.append(f.replace('$',str(i)))
+            else:
+                rm_list.append(f)
+        for root, dirs, files in os.walk(os.getcwd()):
+            for file in files:
+                for f in rm_list:
+                    if fnmatch(file,f):
+                        os.remove(os.path.join(root,file))
+                        break
+
+def data_format():
+    prefix = "_" + pid
+    files = ['MMPBSA','res_MMPBSA','resMM','resMM_COU','resMM_VDW',
+             'resPBSA','resPBSA_PB','resPBSA_SA']
+    datas = []
+    for file in files:
+        filename = prefix + '~' + file + '.dat'
+        datas.append(readindata(filename))
+    try:
+        os.mkdir('data')
+        os.mkdir('data_with_DH')
+    except Exception:
+        pass
+    count = 0
+    for data in datas:
+        dat, dat_with_DH = DH_split(data)
+        dat.to_csv('data/'+str(count)+'.csv')
+        dat_with_DH.to_csv('data_with_DH/'+files[count]+'.csv')
+        count = count + 1
+
+# def data_analysis():
+#     plot_binding_bar(datas_with_dh[0])
+#     plot_plot_pie(datas_with_dh[1:])
+
 if __name__ == '__main__':
     show_logo()
     set_default()
     check_gmx_apbs()
     parse_command(sys.argv)
+    print('>> set up environmets and parameters: OK !\n')
     preprocess()
+    print(">> preprocessing trajectory: OK !\n")
     global pdb_enu
     produce_qrv(pdb_enu[0])
-    for pdb_task in pdb_enu:    
-        cal_mmpbsa(pdb_task)
+    print('>> generate qrv file: OK !\n')
+    threatSet = []
+    count = 0
+    for pdb_task in pdb_enu:
+        l = threading.Thread(target=cal_mmpbsa,args=(pid+str(count),pdb_task))
+        threatSet.append(l)
+        count = count + 1
+        l.start()
+    for l in threatSet:
+        l.join()
+    print('>> Calculate MM PB SA: OK !\n')
+    data_merge(tasks)
+    print('>> Merge Data: OK !\n')
+    data_format()
+    print('>> Reformat Data: OK !\n')
     rm_temp()
+    print('>> Remove tempoary file: OK !\n')
+    # data_analysis()
+    # print('>> Data analysis: OK !\n')
+
