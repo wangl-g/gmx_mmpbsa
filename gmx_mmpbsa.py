@@ -606,7 +606,7 @@ def data_format():
     count = 0
     for data in datas:
         dat, dat_with_DH = DH_split(data)
-        dat.to_csv('data/'+str(count)+'.csv')
+        dat.to_csv('data/'+files[count]+'.csv')
         dat_with_DH.to_csv('data_with_DH/'+files[count]+'.csv')
         count = count + 1
 
