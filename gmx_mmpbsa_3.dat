@@ -410,19 +410,20 @@ awk -v pid=_$pid          -v qrv=$qrv           -v dt="$dt"     \
 				MMres[tag,0], MMres[tag,1],
 				PBres[tag]+SAres[tag],
 				COUres[tag,0], COUres[tag,1], VDWres[tag], \
-				PBres[tag], SAres[tag]  > pid"~res.dat"
+				PBres[tag], SAres[tag]  >> pid"~res.dat"
 
-			ii="";  if(i==1) ii=sprintf("---------------------------------------\n%-9s", "mean")
+			ii="" 
+			#if(i==1) ii=sprintf("---------------------------------------\n%-9s", "mean")
 			txt=""; if(i==Nres) txt="\n"
-			if(withLig) {
-				printf "%s%9.3f(%9.3f) %s", ii, dHres[tag,0], dHres[tag,1]  , txt >> pid"~res_MMPBSA.dat"
-				printf "%s%9.3f(%9.3f) %s", ii, MMres[tag,0], MMres[tag,1]  , txt >> pid"~resMM.dat"
-				printf "%s%9.3f %s",        ii, VDWres[tag]                 , txt >> pid"~resMM_VDW.dat"
-				printf "%s%9.3f(%9.3f) %s", ii, COUres[tag,0], COUres[tag,1], txt >> pid"~resMM_COU.dat"
-			}
-			printf "%s%9.3f %s",        ii, preK*(PBres[tag]+SAres[tag]), txt >> pid"~resPBSA.dat"
-			printf "%s%9.3f %s",        ii, preK*(PBres[tag])           , txt >> pid"~resPBSA_PB.dat"
-			printf "%s%9.3f %s",        ii, preK*(SAres[tag])           , txt >> pid"~resPBSA_SA.dat"
+			# if(withLig) {
+			# 	printf "%s%9.3f(%9.3f) %s", ii, dHres[tag,0], dHres[tag,1]  , txt >> pid"~res_MMPBSA.dat"
+			# 	printf "%s%9.3f(%9.3f) %s", ii, MMres[tag,0], MMres[tag,1]  , txt >> pid"~resMM.dat"
+			# 	printf "%s%9.3f %s",        ii, VDWres[tag]                 , txt >> pid"~resMM_VDW.dat"
+			# 	printf "%s%9.3f(%9.3f) %s", ii, COUres[tag,0], COUres[tag,1], txt >> pid"~resMM_COU.dat"
+			# }
+			# printf "%s%9.3f %s",        ii, preK*(PBres[tag]+SAres[tag]), txt >> pid"~resPBSA.dat"
+			# printf "%s%9.3f %s",        ii, preK*(PBres[tag])           , txt >> pid"~resPBSA_PB.dat"
+			# printf "%s%9.3f %s",        ii, preK*(SAres[tag])           , txt >> pid"~resPBSA_SA.dat"
 		}
 
 		fmt="%s%6s%6s\n"
