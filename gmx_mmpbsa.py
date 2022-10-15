@@ -625,14 +625,14 @@ if __name__ == '__main__':
     global pdb_enu
     produce_qrv(pdb_enu[0])
     print('>> generate qrv file: OK !\n')
-    threatSet = []
+    threadSet = []
     count = 0
     for pdb_task in pdb_enu:
         l = threading.Thread(target=cal_mmpbsa,args=(pid+str(count),pdb_task))
-        threatSet.append(l)
+        threadSet.append(l)
         count = count + 1
         l.start()
-    for l in threatSet:
+    for l in threadSet:
         l.join()
     print('>> Calculate MM PB SA: OK !\n')
     data_merge(tasks)
